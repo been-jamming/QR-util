@@ -33,6 +33,10 @@ extern const uint32_t version_patterns[34];
 
 extern const unsigned char version_position[18][2];
 
+void write_bmp_header(FILE *output_file, unsigned int width, unsigned int height);
+
+void place_bmp_pixels(FILE *output_file, unsigned int width, unsigned int height, unsigned char pixels);
+
 struct qr_code{
 	unsigned char modules[23][177];
 	unsigned char written_mask[23][177];
@@ -78,6 +82,18 @@ void write_ppm_file(FILE *output_file, struct qr_code *qr){
 				bit = 0x80;
 		}
 	}
+}
+
+void write_bmp_file(FILE *output_file, struct qr_code *qr){
+	unsigned int y;
+	unsigned int byte_end;
+	unsigned int current_byte;
+
+	byte_end = qr->version/2 + 2;
+
+	for(y = qr->version*4 + 17; y; y--)
+		for(current_byte = 0; current_byte <= byte_end; current_byte++)
+			place_bmp_pixels(output_file, qr->version*4 + 17, qr->version*4 + 17, qr->modules[current_byte][y - 1]);
 }
 
 void write_module(struct qr_code *qr, unsigned char x, unsigned char y, unsigned char value, unsigned char do_update_mask){
@@ -406,7 +422,7 @@ void write_byte_blocks(struct qr_block *blocks, unsigned int num_blocks, unsigne
 	printf("%d %d 0x%02x\n", blocks[0].data_left, blocks[1].data_left, byte);
 }
 
-void initialize2(unsigned char *version, unsigned char *correction_level, struct qr_block **blocks, unsigned char *data, unsigned int data_size){
+void initialize(unsigned char *version, unsigned char *correction_level, struct qr_block **blocks, unsigned char *data, unsigned int data_size){
 	unsigned int i;
 	unsigned int j;
 	unsigned char header_size;
@@ -429,11 +445,11 @@ void initialize2(unsigned char *version, unsigned char *correction_level, struct
 		return;
 	}
 
-	//*version = i + 1;
-	//*correction_level = j - 1;
-	*version = 37;
-	header_size = 4;
-	*correction_level = 3;
+	*version = i + 1;
+	*correction_level = j - 1;
+	//*version = 1;
+	//header_size = 2;
+	//*correction_level = 0;
 	*blocks = calloc(num_blocks(*version - 1, *correction_level), sizeof(struct qr_block));
 	(*blocks)[0].data_size = capacities[*version - 1][*correction_level][0][2];
 	(*blocks)[0].error_size = capacities[*version - 1][*correction_level][0][1] - (*blocks)[0].data_size;
@@ -491,7 +507,7 @@ void initialize2(unsigned char *version, unsigned char *correction_level, struct
 	for(i = 1; i < data_size; i++)
 		write_byte_blocks(*blocks, num_blocks(*version - 1, *correction_level), ((data[i - 1]&0x0F)<<4) | ((data[i]&0xF0)>>4));
 	write_byte_blocks(*blocks, num_blocks(*version - 1, *correction_level), (data[i - 1]&0x0F)<<4);
-	for(j = 0; j < data_capacity(*version - 1, *correction_level) - header_size - data_size; j++)
+	for(j = 0; j < data_capacity(*version - 1, *correction_level) - header_size - data_size + (header_size == 4); j++)
 		if(j&1)
 			write_byte_blocks(*blocks, num_blocks(*version - 1, *correction_level), 0x11);
 		else
@@ -499,57 +515,6 @@ void initialize2(unsigned char *version, unsigned char *correction_level, struct
 	for(i = 0; i < num_blocks(*version - 1, *correction_level); i++)
 		(*blocks)[i].data_left = (*blocks)[i].data_size;
 }
-
-/*
-void initialize(unsigned char *version, unsigned char *correction_level, unsigned char **buffer, unsigned char **poly, unsigned char *data, unsigned int data_size){
-	unsigned int i;
-	unsigned int j;
-
-	for(i = 0; i < MAX_VERSION; i++){
-		if(data_size <= capacities[i][1] - 2){
-			for(j = 2; j < 5; j++)
-				if(capacities[i][j] - 2 < data_size)
-					break;
-			break;
-		}
-	}
-
-	if(i == MAX_VERSION){
-		*buffer = NULL;
-		return;
-	}
-
-	*version = i + 1;
-	*correction_level = j - 2;
-	// *correction_level = 0;
-	*buffer = malloc(capacities[*version - 1][0]*sizeof(unsigned char));
-
-	(*buffer)[0] = 0x40 | ((data_size&0xF0)>>4);
-	(*buffer)[1] = (data_size&0x0F)<<4;
-	for(i = 1; i < capacities[*version - 1][0] - 1; i++){
-		if(i <= data_size){
-			(*buffer)[i] |= (data[i - 1]&0xF0)>>4;
-			(*buffer)[i + 1] = (data[i - 1]&0x0F)<<4;
-		} else if(i < capacities[*version - 1][*correction_level + 1] - 1){
-			//Padding bytes at the end of the message
-			if((data_size - i)&1)
-				(*buffer)[i + 1] = 0xEC;
-			else
-				(*buffer)[i + 1] = 0x11;
-		} else {
-			//Pad the rest of the buffer with zeros for the calculation of the
-			//remainder in the BCH error correction
-			(*buffer)[i + 1] = 0x00;
-		}
-	}
-	for(i = 0; i <= MAX_POLY; i++){
-		if(capacities[*version - 1][0] - capacities[*version - 1][*correction_level + 1] == qr_polynomials[i][0]){
-			*poly = qr_polynomials[i] + 1;
-			return;
-		}
-	}
-}
-*/
 
 void write_data(struct qr_code *qr, struct qr_block *blocks, unsigned int num_blocks){
 	unsigned int i;
@@ -596,16 +561,17 @@ void free_blocks(struct qr_block *blocks, unsigned int num_blocks){
 	free(blocks);
 }
 
-int generate_qr_code2(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char mask){
+int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char mask){
 	struct qr_code qr;
 	struct qr_block *blocks;
 	unsigned char correction_level;
 
-	initialize2(&(qr.version), &correction_level, &blocks, data, data_size);
+	initialize(&(qr.version), &correction_level, &blocks, data, data_size);
 	if(!blocks)
 		return 1;
 	memset(qr.modules, 0, sizeof(qr.modules));
 	memset(qr.written_mask, 0, sizeof(qr.written_mask));
+	//write_bmp_header(output_file, qr.version*4 + 17, qr.version*4 + 17);
 	write_ppm_header(output_file, &qr);
 	create_finder_patterns(&qr);
 	apply_mask_pattern(&qr, mask);
@@ -622,41 +588,10 @@ int generate_qr_code2(FILE *output_file, unsigned char *data, unsigned int data_
 	create_error_data(blocks, num_blocks(qr.version - 1, correction_level));
 	write_error_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
 	write_ppm_file(output_file, &qr);
+	//write_bmp_file(output_file, &qr);
 	free_blocks(blocks, num_blocks(qr.version - 1, correction_level));
 	return 0;
 }
-
-/*
-int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char mask){
-	struct qr_code qr;
-	unsigned char *buffer;
-	unsigned char *qr_poly;
-	unsigned char correction_level;
-
-	initialize(&(qr.version), &correction_level, &buffer, &qr_poly, data, data_size);
-	if(!buffer)
-		return 1;
-	memset(qr.modules, 0, sizeof(qr.modules));
-	memset(qr.written_mask, 0, sizeof(qr.written_mask));
-	write_ppm_header(output_file, &qr);
-	create_finder_patterns(&qr);
-	apply_mask_pattern(&qr, mask);
-	if(qr.version > 1)
-		create_alignment_patterns(&qr);
-	create_timing_patterns(&qr);
-	create_format_information(&qr, correction_level, mask);
-	qr.x = qr.version*4 + 16;
-	qr.y = qr.version*4 + 16;
-	qr.up = 1;
-	qr.next = 0;
-	write_data(&qr, buffer, capacities[qr.version - 1][correction_level + 1]*8);
-	reduce_poly_GF256(buffer, capacities[qr.version - 1][0], qr_poly, capacities[qr.version - 1][0] - capacities[qr.version - 1][correction_level + 1] + 1);
-	write_data(&qr, buffer + capacities[qr.version - 1][correction_level + 1], (capacities[qr.version - 1][0] - capacities[qr.version - 1][correction_level + 1])*8);
-	write_ppm_file(output_file, &qr);
-	free(buffer);
-	return 0;
-}
-*/
 
 int main(int argc, char **argv){
 	FILE *output_file;
@@ -672,7 +607,7 @@ int main(int argc, char **argv){
 		return 1;
 	}
 
-	if(generate_qr_code2(output_file, (unsigned char *) argv[2], strlen(argv[2]), atoi(argv[1]))){
+	if(generate_qr_code(output_file, (unsigned char *) argv[2], strlen(argv[2]), atoi(argv[1]))){
 		fclose(output_file);
 		fprintf(stderr, "Error: too much data to store\n");
 		return 1;
