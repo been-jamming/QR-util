@@ -2,59 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
-
-#define L_CORRECTION 0
-#define M_CORRECTION 1
-#define Q_CORRECTION 2
-#define H_CORRECTION 3
-
-#define MAX_VERSION 40
-#define MAX_POLY 30
-
-extern unsigned char qr_polynomials[31][70];
-
-extern unsigned char error_correction_table[][4][2][3];
-
-extern unsigned char alignment_coords[41][7];
-
-extern uint8_t GF256_log2[256];
-
-extern uint8_t GF256_2exp[256];
-
-extern uint16_t format_patterns[4][8];
-
-extern unsigned char format_position1[15][2];
-
-extern unsigned char format_position2[15][2];
-
-extern const unsigned int capacities[][4][2][3];
-
-extern const uint32_t version_patterns[34];
-
-extern const unsigned char version_position[18][2];
-
-void write_bmp_header(FILE *output_file, unsigned int width, unsigned int height);
-
-void place_bmp_pixels(FILE *output_file, unsigned int width, unsigned int height, unsigned char pixels);
-
-struct qr_code{
-	unsigned char modules[23][177];
-	unsigned char written_mask[23][177];
-	unsigned char version;
-	int x;
-	int y;
-	unsigned char up;
-	unsigned char next;
-};
-
-struct qr_block{
-	unsigned char *data;
-	unsigned char *poly;
-	unsigned int data_size;
-	unsigned int error_size;
-	unsigned int data_left;
-	unsigned int error_left;
-};
+#include "qrutil.h"
 
 void write_ppm_header(FILE *output_file, struct qr_code *qr){
 	fprintf(output_file, "P6 %d %d 255 ", qr->version*4 + 17, qr->version*4 + 17);
@@ -82,18 +30,6 @@ void write_ppm_file(FILE *output_file, struct qr_code *qr){
 				bit = 0x80;
 		}
 	}
-}
-
-void write_bmp_file(FILE *output_file, struct qr_code *qr){
-	unsigned int y;
-	unsigned int byte_end;
-	unsigned int current_byte;
-
-	byte_end = qr->version/2 + 2;
-
-	for(y = qr->version*4 + 17; y; y--)
-		for(current_byte = 0; current_byte <= byte_end; current_byte++)
-			place_bmp_pixels(output_file, qr->version*4 + 17, qr->version*4 + 17, qr->modules[current_byte][y - 1]);
 }
 
 void write_module(struct qr_code *qr, unsigned char x, unsigned char y, unsigned char value, unsigned char do_update_mask){
@@ -571,8 +507,6 @@ int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_s
 		return 1;
 	memset(qr.modules, 0, sizeof(qr.modules));
 	memset(qr.written_mask, 0, sizeof(qr.written_mask));
-	//write_bmp_header(output_file, qr.version*4 + 17, qr.version*4 + 17);
-	write_ppm_header(output_file, &qr);
 	create_finder_patterns(&qr);
 	apply_mask_pattern(&qr, mask);
 	if(qr.version > 1)
@@ -587,8 +521,7 @@ int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_s
 	write_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
 	create_error_data(blocks, num_blocks(qr.version - 1, correction_level));
 	write_error_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
-	write_ppm_file(output_file, &qr);
-	//write_bmp_file(output_file, &qr);
+	generate_bmp(output_file, &qr, 10);
 	free_blocks(blocks, num_blocks(qr.version - 1, correction_level));
 	return 0;
 }
