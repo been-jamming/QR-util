@@ -2,7 +2,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #include "qrutil.h"
+
+#define NONE 0
+#define VERSION 1
+#define ERROR_CORRECTION 2
+#define UPSCALING 3
+
+#define INPUT_BUFFER_INCREASE 32
+
+char *argument_errors[10] = {NULL};
 
 void write_ppm_header(FILE *output_file, struct qr_code *qr){
 	fprintf(output_file, "P6 %d %d 255 ", qr->version*4 + 17, qr->version*4 + 17);
@@ -355,15 +365,33 @@ void write_byte_blocks(struct qr_block *blocks, unsigned int num_blocks, unsigne
 			return;
 		}
 	}
-	printf("%d %d 0x%02x\n", blocks[0].data_left, blocks[1].data_left, byte);
 }
 
 void initialize(unsigned char *version, unsigned char *correction_level, struct qr_block **blocks, unsigned char *data, unsigned int data_size){
 	unsigned int i;
-	unsigned int j;
+	unsigned int j = 1;
 	unsigned char header_size;
+	unsigned char max_version;
 
-	for(i = 0; i < MAX_VERSION; i++){
+	if(*version){
+		if(*version >= 10)
+			header_size = 4;
+		else
+			header_size = 2;
+		max_version = *version;
+		if(*correction_level && data_capacity(*version - 1, *correction_level - 1) - 2 - 2*(*version >= 10) < data_size){
+			*blocks = NULL;
+			return;
+		} else if(!*correction_level && data_capacity(*version - 1, L_CORRECTION) - 2 - 2*(*version >= 10) < data_size){
+			*blocks = NULL;
+			return;
+		}
+	} else {
+		max_version = MAX_VERSION;
+		*version = 1;
+	}
+
+	for(i = *version - 1; i < max_version; i++){
 		if(i < 9)
 			header_size = 2;
 		else
@@ -382,7 +410,10 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 	}
 
 	*version = i + 1;
-	*correction_level = j - 1;
+	if(!*correction_level)
+		*correction_level = j - 1;
+	else
+		(*correction_level)--;
 	//*version = 1;
 	//header_size = 2;
 	//*correction_level = 0;
@@ -497,14 +528,14 @@ void free_blocks(struct qr_block *blocks, unsigned int num_blocks){
 	free(blocks);
 }
 
-int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char mask){
+int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char mask, unsigned char version, unsigned char correction_level, unsigned int upscaling){
 	struct qr_code qr;
 	struct qr_block *blocks;
-	unsigned char correction_level;
 
-	initialize(&(qr.version), &correction_level, &blocks, data, data_size);
+	initialize(&version, &correction_level, &blocks, data, data_size);
 	if(!blocks)
 		return 1;
+	qr.version = version;
 	memset(qr.modules, 0, sizeof(qr.modules));
 	memset(qr.written_mask, 0, sizeof(qr.written_mask));
 	create_finder_patterns(&qr);
@@ -521,26 +552,123 @@ int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_s
 	write_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
 	create_error_data(blocks, num_blocks(qr.version - 1, correction_level));
 	write_error_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
-	generate_bmp(output_file, &qr, 10);
+	generate_bmp(output_file, &qr, upscaling);
 	free_blocks(blocks, num_blocks(qr.version - 1, correction_level));
 	return 0;
 }
 
+unsigned char parse_arguments(int argc, char **argv, unsigned char *version, unsigned char *error_correction, unsigned int *upscaling, char **filename){
+	int i;
+	int inp;
+	unsigned char argument_state = NONE;
+
+	*filename = NULL;
+	*version = 0;
+	*error_correction = 0;
+	for(i = 1; i < argc; i++){
+		if(!argument_state && !strcmp(argv[i], "-v"))
+			argument_state = VERSION;
+		else if(!argument_state && !strcmp(argv[i], "-c"))
+			argument_state = ERROR_CORRECTION;
+		else if(!argument_state && !strcmp(argv[i], "-u"))
+			argument_state = UPSCALING;
+		else{
+			switch(argument_state){
+				case NONE:
+					if(*filename)
+						return 1;
+					*filename = argv[i];
+					break;
+				case VERSION:
+					if(*version)
+						return 2;
+					inp = atoi(argv[i]);
+					if(inp <= 0 || inp >= 41)
+						return 4;
+					*version = inp;
+					argument_state = NONE;
+					break;
+				case ERROR_CORRECTION:
+					if(*error_correction)
+						return 3;
+					inp = atoi(argv[i]);
+					if(inp <= 0 || inp >= 5)
+						return 5;
+					*error_correction = inp;
+					argument_state = NONE;
+					break;
+				case UPSCALING:
+					if(*upscaling)
+						return 8;
+					inp = atoi(argv[i]);
+					if(inp < 0)
+						return 9;
+					*upscaling = inp;
+					argument_state = NONE;
+					break;
+			}
+		}
+	}
+	if(argument_state)
+		return 6;
+	if(!*filename)
+		return 7;
+	return 0;
+}
+
+void get_data(unsigned char **data, unsigned int *data_size){
+	unsigned int allocated_size = INPUT_BUFFER_INCREASE;
+	int inp;
+
+	*data_size = 0;
+	*data = malloc(sizeof(unsigned char)*allocated_size);
+	while((inp = fgetc(stdin)) != EOF){
+		(*data)[*data_size] = inp;
+		(*data_size)++;
+		if(*data_size >= allocated_size){
+			*data = realloc(*data, allocated_size + INPUT_BUFFER_INCREASE);
+			allocated_size += INPUT_BUFFER_INCREASE;
+		}
+	}
+}
+
 int main(int argc, char **argv){
 	FILE *output_file;
+	unsigned char error;
+	unsigned char version;
+	unsigned char error_correction;
+	char *filename;
+	unsigned char *data;
+	unsigned int data_size;
+	unsigned int upscaling = 0;
 
-	if(argc != 4){
-		fprintf(stderr, "Error: expected exactly three arguments\n");
-		return 1;
+	srand(time(NULL));
+	argument_errors[1] = "Expected no more than one output file\n";
+	argument_errors[2] = "Expected no more than one version\n";
+	argument_errors[3] = "Expected no more than one error correction value\n";
+	argument_errors[4] = "Version must be between 1 and 40\n";
+	argument_errors[5] = "Error correction value must be between 1 and 4\n";
+	argument_errors[6] = "Trailing argument\n";
+	argument_errors[7] = "Expected output file\n";
+	argument_errors[8] = "Expected no more than one upscaling value\n";
+	argument_errors[9] = "Upscaling value must be positive\n";
+
+	error = parse_arguments(argc, argv, &version, &error_correction, &upscaling, &filename);
+	if(!upscaling)
+		upscaling = 1;
+	if(error){
+		fprintf(stderr, "Error: %s", argument_errors[error]);
+		return error;
 	}
 
-	output_file = fopen(argv[3], "wb");
+	output_file = fopen(filename, "wb");
 	if(!output_file){
 		fprintf(stderr, "Error: could not open output file\n");
 		return 1;
 	}
 
-	if(generate_qr_code(output_file, (unsigned char *) argv[2], strlen(argv[2]), atoi(argv[1]))){
+	get_data(&data, &data_size);
+	if(generate_qr_code(output_file, data, data_size, rand()%8, version, error_correction, upscaling)){
 		fclose(output_file);
 		fprintf(stderr, "Error: too much data to store\n");
 		return 1;

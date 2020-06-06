@@ -59,7 +59,6 @@ void generate_bmp(FILE *output_file, struct qr_code *qr, unsigned int upscaling)
 		width_bytes = (width + 8 - width%8)/8;
 	else
 		width_bytes = width/8;
-	printf("%d %d\n", width_bytes, row_bytes);
 	fprintf(output_file, "BM");
 	write_uint32_t(output_file, 62 + row_bytes*(width + 16)*upscaling);
 	write_uint32_t(output_file, 0);
