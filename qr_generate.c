@@ -77,6 +77,17 @@ unsigned char module_written(struct qr_code *qr, unsigned char x, unsigned char 
 	return (qr->written_mask[x/8][y]&(0x80>>(x&7))) != 0;
 }
 
+unsigned char read_mask(unsigned char modules[23][177], unsigned char x, unsigned char y){
+	return (modules[x/8][y]&(0x80>>(x&7))) != 0;
+}
+
+void write_mask(unsigned char modules[23][177], unsigned char x, unsigned char y, unsigned char value){
+	if(value)
+		modules[x/8][y] |= 0x80>>(x&7);
+	else
+		modules[x/8][y] &= ~(0x80>>(x&7));
+}
+
 void create_finder_patterns(struct qr_code *qr){
 	unsigned char byte_start;
 	unsigned char i;
@@ -368,55 +379,66 @@ void write_byte_blocks(struct qr_block *blocks, unsigned int num_blocks, unsigne
 }
 
 void initialize(unsigned char *version, unsigned char *correction_level, struct qr_block **blocks, unsigned char *data, unsigned int data_size){
-	unsigned int i;
-	unsigned int j = 1;
+	int i;
+	int j = 1;
 	unsigned char header_size;
-	unsigned char max_version;
 
 	if(*version){
 		if(*version >= 10)
 			header_size = 4;
 		else
 			header_size = 2;
-		max_version = *version;
-		if(*correction_level && data_capacity(*version - 1, *correction_level - 1) - 2 - 2*(*version >= 10) < data_size){
+		if(*correction_level && data_capacity(*version - 1, *correction_level - 1) - header_size < data_size){
 			*blocks = NULL;
 			return;
-		} else if(!*correction_level && data_capacity(*version - 1, L_CORRECTION) - 2 - 2*(*version >= 10) < data_size){
+		} else if(!*correction_level && data_capacity(*version - 1, L_CORRECTION) - header_size < data_size){
 			*blocks = NULL;
 			return;
+		}
+		if(*correction_level)
+			(*correction_level)--;
+		else{
+			for(i = 3; i >= 0; i--)
+				if(data_capacity(*version - 1, i) - header_size >= data_size)
+					break;
+			*correction_level = i;
 		}
 	} else {
-		max_version = MAX_VERSION;
-		*version = 1;
-	}
-
-	for(i = *version - 1; i < max_version; i++){
-		if(i < 9)
-			header_size = 2;
-		else
-			header_size = 4;
-		if(data_size <= data_capacity(i, L_CORRECTION) - header_size){
-			for(j = 1; j < 4; j++)
-				if(data_capacity(i, j) - header_size < data_size)
+		if(*correction_level){
+			for(i = 0; i < MAX_VERSION; i++){
+				if(i < 9)
+					header_size = 2;
+				else
+					header_size = 4;
+				if(data_capacity(i, *correction_level - 1) - header_size >= data_size)
 					break;
-			break;
+			}
+			*version = i + 1;
+			(*correction_level)--;
+		} else {
+			for(i = 0; i < MAX_VERSION; i++){
+				if(i < 9)
+					header_size = 2;
+				else
+					header_size = 4;
+				if(data_size <= data_capacity(i, L_CORRECTION) - header_size){
+					for(j = 1; j < 4; j++)
+						if(data_capacity(i, j) - header_size < data_size)
+							break;
+					break;
+				}
+			}
+
+			if(i == MAX_VERSION){
+				*blocks = NULL;
+				return;
+			}
+
+			*version = i + 1;
+			*correction_level = j - 1;
 		}
 	}
 
-	if(i == MAX_VERSION){
-		*blocks = NULL;
-		return;
-	}
-
-	*version = i + 1;
-	if(!*correction_level)
-		*correction_level = j - 1;
-	else
-		(*correction_level)--;
-	//*version = 1;
-	//header_size = 2;
-	//*correction_level = 0;
 	*blocks = calloc(num_blocks(*version - 1, *correction_level), sizeof(struct qr_block));
 	(*blocks)[0].data_size = capacities[*version - 1][*correction_level][0][2];
 	(*blocks)[0].error_size = capacities[*version - 1][*correction_level][0][1] - (*blocks)[0].data_size;
@@ -528,9 +550,130 @@ void free_blocks(struct qr_block *blocks, unsigned int num_blocks){
 	free(blocks);
 }
 
-int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char mask, unsigned char version, unsigned char correction_level, unsigned int upscaling){
+void count_rectangle(struct qr_code *qr, unsigned char mask[23][177], unsigned char x, unsigned char y, unsigned int *output){
+	unsigned char color;
+	unsigned int width = 0;
+	unsigned int height = 1;
+	unsigned int i;
+	unsigned char do_break = 0;
+
+	color = read_module(qr, x, y);
+
+	while(width < qr->version*4 + 17 - x && read_module(qr, x + width, y) == color && !read_mask(mask, x + width, y)){
+		width++;
+		write_mask(mask, x + width, y, 1);
+	}
+	while(height < qr->version*4 + 17 - y && !do_break){
+		for(i = 0; i < width; i++){
+			if(read_module(qr, x + width, y + height) != color || read_mask(mask, x + width, y + height)){
+				do_break = 1;
+				break;
+			}
+		}
+		if(!do_break)
+			for(i = 0; i < width; i++)
+				write_mask(mask, x + width, y + height, 1);
+	}
+
+	if(width > 1 && height > 1)
+		*output += 3*(width - 1)*(height - 1);
+}
+
+unsigned char check_finder_pattern_x(struct qr_code *qr, unsigned char x, unsigned char y){
+	return read_module(qr, x, y) && !read_module(qr, x + 1, y) && read_module(qr, x + 2, y) && read_module(qr, x + 3, y) && read_module(qr, x + 4, y) && !read_module(qr, x + 5, y) && read_module(qr, x + 6, y);
+}
+
+unsigned char check_finder_pattern_y(struct qr_code *qr, unsigned char x, unsigned char y){
+	return read_module(qr, x, y) && !read_module(qr, x, y + 1) && read_module(qr, x, y + 2) && read_module(qr, x, y + 3) && read_module(qr, x, y + 4) && !read_module(qr, x, y + 5) && read_module(qr, x, y + 6);
+}
+
+unsigned int grade_qr_code(struct qr_code *qr){
+	unsigned int output = 0;
+	unsigned int x;
+	unsigned int y;
+	unsigned long int num_light = 0;
+	unsigned long int num_dark = 0;
+
+	unsigned char *adjacent_light;
+	unsigned char *adjacent_dark;
+
+	unsigned char (*mask)[23][177];
+
+	adjacent_light = calloc(qr->version*4 + 17, sizeof(unsigned char));
+	adjacent_dark = calloc(qr->version*4 + 17, sizeof(unsigned char));
+
+	for(x = 0; x < qr->version*4 + 17; x++){
+		for(y = 0; y < qr->version*4 + 17; y++){
+			if(read_module(qr, x, y)){
+				num_dark++;
+				if(adjacent_light[y] > 3)
+					output += adjacent_light[y] - 2;
+				adjacent_light[y] = 0;
+				adjacent_dark[y]++;
+			} else {
+				num_light++;
+				if(adjacent_dark[y] > 3)
+					output += adjacent_dark[y] - 2;
+				adjacent_dark[y] = 0;
+				adjacent_light[y]++;
+			}
+		}
+	}
+
+	memset(adjacent_light, 0, sizeof(unsigned char)*(qr->version*4 + 17));
+	memset(adjacent_dark, 0, sizeof(unsigned char)*(qr->version*4 + 17));
+
+	for(y = 0; y < qr->version*4 + 17; y++){
+		for(x = 0; x < qr->version*4 + 17; x++){
+			if(read_module(qr, x, y)){
+				if(adjacent_light[y] > 3)
+					output += adjacent_light[y] - 2;
+				adjacent_light[y] = 0;
+				adjacent_dark[y]++;
+			} else {
+				if(adjacent_dark[y] > 3)
+					output += adjacent_dark[y] - 2;
+				adjacent_dark[y] = 0;
+				adjacent_light[y]++;
+			}
+		}
+	}
+
+	free(adjacent_light);
+	free(adjacent_dark);
+	mask = calloc(23*177, sizeof(unsigned char));
+
+	for(x = 0; x < qr->version*4 + 17; x++){
+		for(y = 0; y < qr->version*4 + 17; y++){
+			if(!read_mask(*mask, x, y))
+				count_rectangle(qr, *mask, x, y, &output);
+		}
+	}
+
+	free(mask);
+
+	for(x = 0; x < qr->version*4 + 17; x++)
+		for(y = 0; y < qr->version*4 + 10; y++)
+			if(check_finder_pattern_y(qr, x, y))
+				output += 40;
+	for(y = 0; y < qr->version*4 + 17; y++)
+		for(x = 0; x < qr->version*4 + 10; x++)
+			if(check_finder_pattern_x(qr, x, y))
+				output += 40;
+	
+	if(num_light > num_dark)
+		output += num_light*200/(num_light + num_dark) - 100;
+
+	return output;
+}
+
+int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char version, unsigned char correction_level, unsigned int upscaling){
 	struct qr_code qr;
 	struct qr_block *blocks;
+	unsigned int score;
+	unsigned int best_score;
+	unsigned char best_mask;
+	unsigned char mask;
 
 	initialize(&version, &correction_level, &blocks, data, data_size);
 	if(!blocks)
@@ -539,20 +682,38 @@ int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_s
 	memset(qr.modules, 0, sizeof(qr.modules));
 	memset(qr.written_mask, 0, sizeof(qr.written_mask));
 	create_finder_patterns(&qr);
-	apply_mask_pattern(&qr, mask);
 	if(qr.version > 1)
 		create_alignment_patterns(&qr);
 	create_version_information(&qr);
 	create_timing_patterns(&qr);
-	create_format_information(&qr, correction_level, mask);
 	qr.x = qr.version*4 + 16;
 	qr.y = qr.version*4 + 16;
 	qr.up = 1;
 	qr.next = 0;
+	create_format_information(&qr, correction_level, 0);
 	write_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
 	create_error_data(blocks, num_blocks(qr.version - 1, correction_level));
 	write_error_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
+	apply_mask_pattern(&qr, 0);
+	best_score = grade_qr_code(&qr);
+	apply_mask_pattern(&qr, 0);
+	best_mask = 0;
+
+	for(mask = 1; mask < 8; mask++){
+		create_format_information(&qr, correction_level, mask);
+		apply_mask_pattern(&qr, mask);
+		score = grade_qr_code(&qr);
+		if(score < best_score){
+			best_score = score;
+			best_mask = mask;
+		}
+		apply_mask_pattern(&qr, mask);
+	}
+
+	create_format_information(&qr, correction_level, best_mask);
+	apply_mask_pattern(&qr, best_mask);
 	generate_bmp(output_file, &qr, upscaling);
+
 	free_blocks(blocks, num_blocks(qr.version - 1, correction_level));
 	return 0;
 }
@@ -630,6 +791,8 @@ void get_data(unsigned char **data, unsigned int *data_size){
 			allocated_size += INPUT_BUFFER_INCREASE;
 		}
 	}
+
+	(*data_size)--;
 }
 
 int main(int argc, char **argv){
@@ -668,7 +831,7 @@ int main(int argc, char **argv){
 	}
 
 	get_data(&data, &data_size);
-	if(generate_qr_code(output_file, data, data_size, rand()%8, version, error_correction, upscaling)){
+	if(generate_qr_code(output_file, data, data_size, version, error_correction, upscaling)){
 		fclose(output_file);
 		fprintf(stderr, "Error: too much data to store\n");
 		return 1;
