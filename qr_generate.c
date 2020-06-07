@@ -414,6 +414,10 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 				if(data_capacity(i, *correction_level - 1) - header_size >= data_size)
 					break;
 			}
+			if(i == MAX_VERSION){
+				*blocks = NULL;
+				return;
+			}
 			*version = i + 1;
 			(*correction_level)--;
 		} else {
