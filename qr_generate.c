@@ -12,7 +12,8 @@
 
 #define INPUT_BUFFER_INCREASE 32
 
-char *argument_errors[10] = {NULL};
+char *argument_errors[11] = {NULL};
+char *option_string;
 
 void write_ppm_header(FILE *output_file, struct qr_code *qr){
 	fprintf(output_file, "P6 %d %d 255 ", qr->version*4 + 17, qr->version*4 + 17);
@@ -667,7 +668,7 @@ unsigned int grade_qr_code(struct qr_code *qr){
 	return output;
 }
 
-int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char version, unsigned char correction_level, unsigned int upscaling){
+int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char version, unsigned char correction_level, unsigned int upscaling, unsigned char verbose){
 	struct qr_code qr;
 	struct qr_block *blocks;
 	unsigned int score;
@@ -713,12 +714,19 @@ int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_s
 	create_format_information(&qr, correction_level, best_mask);
 	apply_mask_pattern(&qr, best_mask);
 	generate_bmp(output_file, &qr, upscaling);
-
 	free_blocks(blocks, num_blocks(qr.version - 1, correction_level));
+
+	if(verbose)
+		printf("Version: %d\n"
+		       "Error Correction: %d\n"
+		       "Mask: %d\n"
+		       "Upscaling: %d\n", (int) version, (int) correction_level + 1, (int) best_mask, (int) upscaling
+		);
+
 	return 0;
 }
 
-unsigned char parse_arguments(int argc, char **argv, unsigned char *version, unsigned char *error_correction, unsigned int *upscaling, char **filename){
+unsigned char parse_arguments(int argc, char **argv, unsigned char *version, unsigned char *error_correction, unsigned int *upscaling, char **filename, unsigned char *help, unsigned char *verbose){
 	int i;
 	int inp;
 	unsigned char argument_state = NONE;
@@ -733,7 +741,14 @@ unsigned char parse_arguments(int argc, char **argv, unsigned char *version, uns
 			argument_state = ERROR_CORRECTION;
 		else if(!argument_state && !strcmp(argv[i], "-u"))
 			argument_state = UPSCALING;
-		else{
+		else if(!argument_state && (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")))
+			*help = 1;
+		else if(!argument_state && !strcmp(argv[i], "--verbose"))
+			*verbose = 1;
+		else if(!argument_state && argv[i][0] == '-'){
+			option_string = argv[i];
+			return 10;
+		} else {
 			switch(argument_state){
 				case NONE:
 					if(*filename)
@@ -762,7 +777,7 @@ unsigned char parse_arguments(int argc, char **argv, unsigned char *version, uns
 					if(*upscaling)
 						return 8;
 					inp = atoi(argv[i]);
-					if(inp < 0)
+					if(inp <= 0)
 						return 9;
 					*upscaling = inp;
 					argument_state = NONE;
@@ -772,7 +787,7 @@ unsigned char parse_arguments(int argc, char **argv, unsigned char *version, uns
 	}
 	if(argument_state)
 		return 6;
-	if(!*filename)
+	if(!*filename && !*help)
 		return 7;
 	return 0;
 }
@@ -804,6 +819,8 @@ int main(int argc, char **argv){
 	unsigned char *data;
 	unsigned int data_size;
 	unsigned int upscaling = 0;
+	unsigned char help;
+	unsigned char verbose;
 
 	srand(time(NULL));
 	argument_errors[1] = "Expected no more than one output file\n";
@@ -815,11 +832,26 @@ int main(int argc, char **argv){
 	argument_errors[7] = "Expected output file\n";
 	argument_errors[8] = "Expected no more than one upscaling value\n";
 	argument_errors[9] = "Upscaling value must be positive\n";
+	argument_errors[10] = "Unrecognized option";
 
-	error = parse_arguments(argc, argv, &version, &error_correction, &upscaling, &filename);
+	error = parse_arguments(argc, argv, &version, &error_correction, &upscaling, &filename, &help, &verbose);
+	if(help){
+		printf("Usage: qrutil [args] [BMP output file]\n"
+		       "\t-h\n"
+		       "\t--help    Display this message\n"
+		       "\t-v [num]  Generate qr code of this version (1-40)\n"
+		       "\t-c [num]  Generate qr code with this level of error correction (1-4)\n"
+		       "\t-u [num]  Upscale output image. Each module is num x num pixels\n"
+		       "\t--verbose Display information about the generated qr code\n"
+		);
+		return 0;
+	}
 	if(!upscaling)
 		upscaling = 1;
-	if(error){
+	if(error == 10){
+		fprintf(stderr, "Error: %s '%s'\n", argument_errors[10], option_string);
+		return error;
+	} else if(error){
 		fprintf(stderr, "Error: %s", argument_errors[error]);
 		return error;
 	}
@@ -831,7 +863,7 @@ int main(int argc, char **argv){
 	}
 
 	get_data(&data, &data_size);
-	if(generate_qr_code(output_file, data, data_size, version, error_correction, upscaling)){
+	if(generate_qr_code(output_file, data, data_size, version, error_correction, upscaling, verbose)){
 		fclose(output_file);
 		fprintf(stderr, "Error: too much data to store\n");
 		return 1;
