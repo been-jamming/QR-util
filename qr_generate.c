@@ -795,8 +795,8 @@ int main(int argc, char **argv){
 	unsigned char *data;
 	unsigned int data_size;
 	unsigned int upscaling = 0;
-	unsigned char help;
-	unsigned char verbose;
+	unsigned char help = 0;
+	unsigned char verbose = 0;
 
 	srand(time(NULL));
 	argument_errors[1] = "Expected no more than one output file\n";
