@@ -15,34 +15,6 @@
 char *argument_errors[11] = {NULL};
 char *option_string;
 
-void write_ppm_header(FILE *output_file, struct qr_code *qr){
-	fprintf(output_file, "P6 %d %d 255 ", qr->version*4 + 17, qr->version*4 + 17);
-}
-
-void write_ppm_file(FILE *output_file, struct qr_code *qr){
-	unsigned int x;
-	unsigned int y;
-	unsigned char bit;
-
-	for(y = 0; y < qr->version*4 + 17; y++){
-		bit = 0x80;
-		for(x = 0; x < qr->version*4 + 17; x++){
-			if(bit&qr->modules[x/8][y]){
-				fputc(0x00, output_file);
-				fputc(0x00, output_file);
-				fputc(0x00, output_file);
-			} else {
-				fputc(0xFF, output_file);
-				fputc(0xFF, output_file);
-				fputc(0xFF, output_file);
-			}
-			bit >>= 1;
-			if(!bit)
-				bit = 0x80;
-		}
-	}
-}
-
 void write_module(struct qr_code *qr, unsigned char x, unsigned char y, unsigned char value, unsigned char do_update_mask){
 	if(value)
 		qr->modules[x/8][y] |= 0x80>>(x&7);
