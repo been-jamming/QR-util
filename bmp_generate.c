@@ -7,7 +7,7 @@
 
 static void write_uint16_t(FILE *output_file, uint16_t n){
 	fputc(n&0xFF, output_file);
-	fputc((n&0xFF00)>>4, output_file);
+	fputc((n&0xFF00)>>8, output_file);
 }
 
 static void write_uint32_t(FILE *output_file, uint32_t n){
