@@ -351,10 +351,11 @@ void write_byte_blocks(struct qr_block *blocks, unsigned int num_blocks, unsigne
 	}
 }
 
-void initialize(unsigned char *version, unsigned char *correction_level, struct qr_block **blocks, unsigned char *data, unsigned int data_size){
+unsigned char initialize(unsigned char *version, unsigned char *correction_level, struct qr_block **blocks, unsigned char *data, unsigned int data_size){
 	int i;
 	int j = 1;
 	unsigned char header_size;
+	unsigned char calloc_fail = 0;
 
 	if(*version){
 		if(*version >= 10)
@@ -363,10 +364,10 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 			header_size = 2;
 		if(*correction_level && data_capacity(*version - 1, *correction_level - 1) - header_size < data_size){
 			*blocks = NULL;
-			return;
+			return 0;
 		} else if(!*correction_level && data_capacity(*version - 1, L_CORRECTION) - header_size < data_size){
 			*blocks = NULL;
-			return;
+			return 0;
 		}
 		if(*correction_level)
 			(*correction_level)--;
@@ -388,7 +389,7 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 			}
 			if(i == MAX_VERSION){
 				*blocks = NULL;
-				return;
+				return 0;
 			}
 			*version = i + 1;
 			(*correction_level)--;
@@ -408,7 +409,7 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 
 			if(i == MAX_VERSION){
 				*blocks = NULL;
-				return;
+				return 0;
 			}
 
 			*version = i + 1;
@@ -417,11 +418,14 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 	}
 
 	*blocks = calloc(num_blocks(*version - 1, *correction_level), sizeof(struct qr_block));
+	if(!*blocks)
+		return 1;
 	(*blocks)[0].data_size = capacities[*version - 1][*correction_level][0][2];
 	(*blocks)[0].error_size = capacities[*version - 1][*correction_level][0][1] - (*blocks)[0].data_size;
 	(*blocks)[0].data_left = (*blocks)[0].data_size;
 	(*blocks)[0].error_left = (*blocks)[0].error_size;
 	(*blocks)[0].data = calloc((*blocks)[0].data_size + (*blocks)[0].error_size, sizeof(unsigned char));
+	calloc_fail |= !(*blocks)[0].data;
 	for(i = 0; i <= MAX_POLY; i++)
 		if(qr_polynomials[i][0] == (*blocks)[0].error_size){
 			(*blocks)[0].poly = qr_polynomials[i] + 1;
@@ -431,7 +435,7 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 		free((*blocks)[0].data);
 		free(*blocks);
 		*blocks = NULL;
-		return;
+		return 0;
 	}
 		
 	for(i = 1; i < capacities[*version - 1][*correction_level][0][0]; i++){
@@ -440,6 +444,7 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 		(*blocks)[i].data_left = (*blocks)[i].data_size;
 		(*blocks)[i].error_left = (*blocks)[i].error_size;
 		(*blocks)[i].data = calloc((*blocks)[i].data_size + (*blocks)[i].error_size, sizeof(unsigned char));
+		calloc_fail |= !(*blocks)[i].data;
 		(*blocks)[i].poly = (*blocks)[0].poly;
 	}
 	if(i < num_blocks(*version - 1, *correction_level)){
@@ -448,6 +453,7 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 		(*blocks)[i].data_left = (*blocks)[i].data_size;
 		(*blocks)[i].error_left = (*blocks)[i].error_size;
 		(*blocks)[i].data = calloc((*blocks)[i].data_size + (*blocks)[i].error_size, sizeof(unsigned char));
+		calloc_fail |= !(*blocks)[i].data;
 		for(j = 0; j <= MAX_POLY; j++)
 			if(qr_polynomials[j][0] == (*blocks)[i].error_size){
 				(*blocks)[i].poly = qr_polynomials[j] + 1;
@@ -459,9 +465,12 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 			(*blocks)[j].data_left = (*blocks)[j].data_size;
 			(*blocks)[j].error_left = (*blocks)[j].error_size;
 			(*blocks)[j].data = calloc((*blocks)[j].data_size + (*blocks)[j].error_size, sizeof(unsigned char));
+			calloc_fail |= !(*blocks)[j].data;
 			(*blocks)[j].poly = (*blocks)[i].poly;
 		}
 	}
+	if(calloc_fail)
+		return 1;
 	if(header_size == 4){
 		write_byte_blocks(*blocks, num_blocks(*version - 1, *correction_level), 0x40 | ((data_size&0xF000)>>12));
 		write_byte_blocks(*blocks, num_blocks(*version - 1, *correction_level), ((data_size&0x0F00)>>4) | ((data_size&0x00F0)>>4));
@@ -480,6 +489,8 @@ void initialize(unsigned char *version, unsigned char *correction_level, struct 
 			write_byte_blocks(*blocks, num_blocks(*version - 1, *correction_level), 0xEC);
 	for(i = 0; i < num_blocks(*version - 1, *correction_level); i++)
 		(*blocks)[i].data_left = (*blocks)[i].data_size;
+
+	return 0;
 }
 
 void write_data(struct qr_code *qr, struct qr_block *blocks, unsigned int num_blocks){
@@ -523,7 +534,8 @@ void free_blocks(struct qr_block *blocks, unsigned int num_blocks){
 	unsigned int i;
 
 	for(i = 0; i < num_blocks; i++)
-		free(blocks[i].data);
+		if(blocks[i].data)
+			free(blocks[i].data);
 	free(blocks);
 }
 
@@ -571,13 +583,9 @@ unsigned int grade_qr_code(struct qr_code *qr){
 	unsigned long int num_light = 0;
 	unsigned long int num_dark = 0;
 
-	unsigned char *adjacent_light;
-	unsigned char *adjacent_dark;
-
-	unsigned char (*mask)[23][177];
-
-	adjacent_light = calloc(qr->version*4 + 17, sizeof(unsigned char));
-	adjacent_dark = calloc(qr->version*4 + 17, sizeof(unsigned char));
+	unsigned char mask[23][177];
+	unsigned char adjacent_light[177] = {0};
+	unsigned char adjacent_dark[177] = {0};
 
 	for(x = 0; x < qr->version*4 + 17; x++){
 		for(y = 0; y < qr->version*4 + 17; y++){
@@ -616,18 +624,13 @@ unsigned int grade_qr_code(struct qr_code *qr){
 		}
 	}
 
-	free(adjacent_light);
-	free(adjacent_dark);
-	mask = calloc(23*177, sizeof(unsigned char));
-
 	for(x = 0; x < qr->version*4 + 17; x++){
 		for(y = 0; y < qr->version*4 + 17; y++){
-			if(!read_mask(*mask, x, y))
-				count_rectangle(qr, *mask, x, y, &output);
+			if(!read_mask(mask, x, y))
+				count_rectangle(qr, mask, x, y, &output);
 		}
 	}
 
-	free(mask);
 
 	for(x = 0; x < qr->version*4 + 17; x++)
 		for(y = 0; y < qr->version*4 + 10; y++)
@@ -652,7 +655,11 @@ int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_s
 	unsigned char best_mask;
 	unsigned char mask;
 
-	initialize(&version, &correction_level, &blocks, data, data_size);
+	if(initialize(&version, &correction_level, &blocks, data, data_size)){
+		if(blocks)
+			free_blocks(blocks, num_blocks(version - 1, correction_level));
+		return 2;
+	}
 	if(!blocks)
 		return 1;
 	qr.version = version;
@@ -702,7 +709,7 @@ int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_s
 	return 0;
 }
 
-unsigned char parse_arguments(int argc, char **argv, unsigned char *version, unsigned char *error_correction, unsigned int *upscaling, char **filename, unsigned char *help, unsigned char *verbose){
+int parse_arguments(int argc, char **argv, unsigned char *version, unsigned char *error_correction, unsigned int *upscaling, char **filename, unsigned char *help, unsigned char *verbose){
 	int i;
 	int inp;
 	unsigned char argument_state = NONE;
@@ -770,15 +777,24 @@ unsigned char parse_arguments(int argc, char **argv, unsigned char *version, uns
 
 void get_data(unsigned char **data, unsigned int *data_size){
 	unsigned int allocated_size = INPUT_BUFFER_INCREASE;
+	unsigned char *new_data;
 	int inp;
 
 	*data_size = 0;
 	*data = malloc(sizeof(unsigned char)*allocated_size);
+	if(!*data)
+		return;
 	while((inp = fgetc(stdin)) != EOF){
 		(*data)[*data_size] = inp;
 		(*data_size)++;
 		if(*data_size >= allocated_size){
-			*data = realloc(*data, allocated_size + INPUT_BUFFER_INCREASE);
+			new_data = realloc(*data, allocated_size + INPUT_BUFFER_INCREASE);
+			if(!new_data){
+				free(*data);
+				*data = NULL;
+				return;
+			} else
+				*data = new_data;
 			allocated_size += INPUT_BUFFER_INCREASE;
 		}
 	}
@@ -788,7 +804,7 @@ void get_data(unsigned char **data, unsigned int *data_size){
 
 int main(int argc, char **argv){
 	FILE *output_file;
-	unsigned char error;
+	int error;
 	unsigned char version;
 	unsigned char error_correction;
 	char *filename;
@@ -839,13 +855,20 @@ int main(int argc, char **argv){
 	}
 
 	get_data(&data, &data_size);
-	if(generate_qr_code(output_file, data, data_size, version, error_correction, upscaling, verbose)){
-		fclose(output_file);
-		fprintf(stderr, "Error: too much data to store\n");
+	if(!data){
+		fprintf(stderr, "Error: out of memory\n");
 		return 1;
 	}
 
+	error = generate_qr_code(output_file, data, data_size, version, error_correction, upscaling, verbose);
 	fclose(output_file);
+	if(error == 1){
+		fprintf(stderr, "Error: too much data to store\n");
+		return 1;
+	} else if(error == 2){
+		fprintf(stderr, "Error: out of memory\n");
+		return 1;
+	}
 
 	return 0;
 }
