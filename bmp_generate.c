@@ -38,7 +38,7 @@ static void write_bytes_upscaling(FILE *output_file, unsigned char byte, unsigne
 	}
 }
 
-void generate_bmp(FILE *output_file, struct qr_code *qr, unsigned int upscaling){
+void generate_bmp(FILE *output_file, struct qr_code *qr, unsigned int upscaling, unsigned char invert){
 	unsigned int width;
 	unsigned int row_bytes;
 	unsigned int width_bytes;
@@ -46,7 +46,10 @@ void generate_bmp(FILE *output_file, struct qr_code *qr, unsigned int upscaling)
 	int current_byte;
 	int i;
 	int j;
+	unsigned char invert_mask = 0;
 
+	if(invert)
+		invert_mask = 0xFF;
 	if(!upscaling)
 		return;
 
@@ -79,23 +82,23 @@ void generate_bmp(FILE *output_file, struct qr_code *qr, unsigned int upscaling)
 	for(y = 0; y < 8; y++)
 		for(i = 0; i < upscaling; i++)
 			for(current_byte = 0; current_byte < row_bytes; current_byte++)
-				fputc(0, output_file);
+				fputc(invert_mask, output_file);
 	for(y = width - 1; y >= 0; y--)
 		for(i = 0; i < upscaling; i++){
 			for(j = 0; j < upscaling; j++)
-				fputc(0, output_file);
+				fputc(invert_mask, output_file);
 			current_byte = upscaling;
 			for(j = 0; j < width_bytes; j++){
-				write_bytes_upscaling(output_file, qr->modules[j][y], upscaling);
+				write_bytes_upscaling(output_file, qr->modules[j][y]^invert_mask, upscaling);
 				current_byte += upscaling;
 			}
 			while(current_byte < row_bytes){
-				fputc(0, output_file);
+				fputc(invert_mask, output_file);
 				current_byte++;
 			}
 		}
 	for(y = 0; y < 8; y++)
 		for(i = 0; i < upscaling; i++)
 			for(current_byte = 0; current_byte < row_bytes; current_byte++)
-				fputc(0, output_file);
+				fputc(invert_mask, output_file);
 }

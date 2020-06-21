@@ -48,6 +48,16 @@ There are 40 versions of qr codes (1-40), with increasing versions being bigger 
 
 This would make a very big qr code which just stores the text `hello world`. Note that bigger qr codes are significantly harder to scan using qr code scanners.
 
+### Inverting
+Qr codes also support an "inverted" mode in which the background is black and the color of each module is reversed. To create an inverted qr code, use '-i':
+
+```echo "hello world" | qrutil -u 10 -i qrcode.bmp```
+
+### Mask
+By default, qrutil tries to choose the best of the 8 possible masks that can be used to generate qr codes. You can instead specify which mask to use using `-m [num]` where `[num]` is an integer between 1 and 8:
+
+```echo "hello world" | qrutil -u 10 -m 7 qrcode.bmp```
+
 ### Verbose mode
 qrutil can print out information about the qr code it generates. Use the `--verbose` option:
 

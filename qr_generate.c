@@ -9,10 +9,11 @@
 #define VERSION 1
 #define ERROR_CORRECTION 2
 #define UPSCALING 3
+#define MASK 4
 
 #define INPUT_BUFFER_INCREASE 32
 
-char *argument_errors[11] = {NULL};
+char *argument_errors[13] = {NULL};
 char *option_string;
 
 void write_module(struct qr_code *qr, unsigned char x, unsigned char y, unsigned char value, unsigned char do_update_mask){
@@ -647,13 +648,13 @@ unsigned int grade_qr_code(struct qr_code *qr){
 	return output;
 }
 
-int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char version, unsigned char correction_level, unsigned int upscaling, unsigned char verbose){
+int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_size, unsigned char version, unsigned char correction_level, unsigned char mask, unsigned int upscaling, unsigned char verbose, unsigned char invert){
 	struct qr_code qr;
 	struct qr_block *blocks;
 	unsigned int score;
 	unsigned int best_score;
 	unsigned char best_mask;
-	unsigned char mask;
+	char *invert_strings[] = {"no", "yes"};
 
 	if(initialize(&version, &correction_level, &blocks, data, data_size)){
 		if(blocks)
@@ -674,58 +675,74 @@ int generate_qr_code(FILE *output_file, unsigned char *data, unsigned int data_s
 	qr.y = qr.version*4 + 16;
 	qr.up = 1;
 	qr.next = 0;
-	create_format_information(&qr, correction_level, 0);
-	write_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
-	create_error_data(blocks, num_blocks(qr.version - 1, correction_level));
-	write_error_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
-	apply_mask_pattern(&qr, 0);
-	best_score = grade_qr_code(&qr);
-	apply_mask_pattern(&qr, 0);
-	best_mask = 0;
+	if(!mask){
+		create_format_information(&qr, correction_level, 0);
+		write_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
+		create_error_data(blocks, num_blocks(qr.version - 1, correction_level));
+		write_error_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
+		apply_mask_pattern(&qr, 0);
+		best_score = grade_qr_code(&qr);
+		apply_mask_pattern(&qr, 0);
+		best_mask = 0;
 
-	for(mask = 1; mask < 8; mask++){
-		create_format_information(&qr, correction_level, mask);
-		apply_mask_pattern(&qr, mask);
-		score = grade_qr_code(&qr);
-		if(score < best_score){
-			best_score = score;
-			best_mask = mask;
+		for(mask = 1; mask < 8; mask++){
+			create_format_information(&qr, correction_level, mask);
+			apply_mask_pattern(&qr, mask);
+			score = grade_qr_code(&qr);
+			if(score < best_score){
+				best_score = score;
+				best_mask = mask;
+			}
+			apply_mask_pattern(&qr, mask);
 		}
-		apply_mask_pattern(&qr, mask);
-	}
 
-	create_format_information(&qr, correction_level, best_mask);
-	apply_mask_pattern(&qr, best_mask);
-	generate_bmp(output_file, &qr, upscaling);
+		create_format_information(&qr, correction_level, best_mask);
+		apply_mask_pattern(&qr, best_mask);
+	} else {
+		create_format_information(&qr, correction_level, mask - 1);
+		write_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
+		create_error_data(blocks, num_blocks(qr.version - 1, correction_level));
+		write_error_data(&qr, blocks, num_blocks(qr.version - 1, correction_level));
+		apply_mask_pattern(&qr, mask - 1);
+		best_mask = mask - 1;
+	}
+	generate_bmp(output_file, &qr, upscaling, invert);
 	free_blocks(blocks, num_blocks(qr.version - 1, correction_level));
 
 	if(verbose)
 		printf("Version: %d\n"
 		       "Error Correction: %d\n"
 		       "Mask: %d\n"
-		       "Upscaling: %d\n", (int) version, (int) correction_level + 1, (int) best_mask, (int) upscaling
+		       "Upscaling: %d\n"
+		       "Inverted: %s\n", (int) version, (int) correction_level + 1, (int) best_mask + 1, (int) upscaling, invert_strings[invert]
 		);
 
 	return 0;
 }
 
-int parse_arguments(int argc, char **argv, unsigned char *version, unsigned char *error_correction, unsigned int *upscaling, char **filename, unsigned char *help, unsigned char *verbose){
+int parse_arguments(int argc, char **argv, unsigned char *version, unsigned char *error_correction, unsigned char *mask, unsigned int *upscaling, char **filename, unsigned char *help, unsigned char *verbose, unsigned char *invert){
 	int i;
 	int inp;
 	unsigned char argument_state = NONE;
 
+	*invert = 0;
 	*filename = NULL;
 	*version = 0;
 	*error_correction = 0;
+	*mask = 0;
 	for(i = 1; i < argc; i++){
 		if(!argument_state && !strcmp(argv[i], "-v"))
 			argument_state = VERSION;
 		else if(!argument_state && !strcmp(argv[i], "-c"))
 			argument_state = ERROR_CORRECTION;
+		else if(!argument_state && !strcmp(argv[i], "-m"))
+			argument_state = MASK;
 		else if(!argument_state && !strcmp(argv[i], "-u"))
 			argument_state = UPSCALING;
 		else if(!argument_state && (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")))
 			*help = 1;
+		else if(!argument_state && !strcmp(argv[i], "-i"))
+			*invert = 1;
 		else if(!argument_state && !strcmp(argv[i], "--verbose"))
 			*verbose = 1;
 		else if(!argument_state && argv[i][0] == '-'){
@@ -754,6 +771,15 @@ int parse_arguments(int argc, char **argv, unsigned char *version, unsigned char
 					if(inp <= 0 || inp >= 5)
 						return 5;
 					*error_correction = inp;
+					argument_state = NONE;
+					break;
+				case MASK:
+					if(*mask)
+						return 11;
+					inp = atoi(argv[i]);
+					if(inp <= 0 || inp >= 9)
+						return 12;
+					*mask = inp;
 					argument_state = NONE;
 					break;
 				case UPSCALING:
@@ -813,6 +839,8 @@ int main(int argc, char **argv){
 	unsigned int upscaling = 0;
 	unsigned char help = 0;
 	unsigned char verbose = 0;
+	unsigned char invert = 0;
+	unsigned char mask = 0;
 
 	srand(time(NULL));
 	argument_errors[1] = "Expected no more than one output file\n";
@@ -825,15 +853,19 @@ int main(int argc, char **argv){
 	argument_errors[8] = "Expected no more than one upscaling value\n";
 	argument_errors[9] = "Upscaling value must be positive\n";
 	argument_errors[10] = "Unrecognized option";
+	argument_errors[11] = "Expected no more than one mask\n";
+	argument_errors[12] = "Mask must be between 1 and 8\n";
 
-	error = parse_arguments(argc, argv, &version, &error_correction, &upscaling, &filename, &help, &verbose);
+	error = parse_arguments(argc, argv, &version, &error_correction, &mask, &upscaling, &filename, &help, &verbose, &invert);
 	if(help){
 		printf("Usage: qrutil [args] [BMP output file]\n"
 		       "\t-h\n"
 		       "\t--help    Display this message\n"
 		       "\t-v [num]  Generate qr code of this version (1-40)\n"
 		       "\t-c [num]  Generate qr code with this level of error correction (1-4)\n"
+		       "\t-m [num]  Generate qr code with this mask instead of automatically choosing (1-8)\n"
 		       "\t-u [num]  Upscale output image. Each module is num x num pixels\n"
+		       "\t-i        Invert output image (These codes should still read on a black background)\n"
 		       "\t--verbose Display information about the generated qr code\n"
 		);
 		return 0;
@@ -860,7 +892,7 @@ int main(int argc, char **argv){
 		return 1;
 	}
 
-	error = generate_qr_code(output_file, data, data_size, version, error_correction, upscaling, verbose);
+	error = generate_qr_code(output_file, data, data_size, version, error_correction, mask, upscaling, verbose, invert);
 	fclose(output_file);
 	if(error == 1){
 		fprintf(stderr, "Error: too much data to store\n");

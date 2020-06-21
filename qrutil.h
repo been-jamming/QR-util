@@ -47,4 +47,4 @@ struct qr_block{
 	unsigned int error_left;
 };
 
-extern void generate_bmp(FILE *output_file, struct qr_code *qr, unsigned int upscaling);
+extern void generate_bmp(FILE *output_file, struct qr_code *qr, unsigned int upscaling, unsigned char invert);
